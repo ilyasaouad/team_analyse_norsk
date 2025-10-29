@@ -4,6 +4,13 @@ from pathlib import Path
 
 from config import Config
 
+# Page configuration must be first Streamlit call
+st.set_page_config(
+    page_title="Patent Data Viewer",
+    page_icon="📊",
+    layout="wide"
+)
+
 # Simple password gate
 password = st.text_input("Enter password:", type="password")
 if password != st.secrets["app_password"]:
@@ -11,15 +18,7 @@ if password != st.secrets["app_password"]:
         st.error("Wrong password")
     st.stop()
 
-# Optional visual confirmation
 st.success("Access granted")
-
-# Page configuration
-st.set_page_config(
-    page_title="Patent Data Viewer",
-    page_icon="📊",
-    layout="wide"
-)
 
 # Title
 st.title("📊 Patent Applicant/Inventor Data Viewer")
