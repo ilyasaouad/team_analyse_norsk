@@ -4,6 +4,16 @@ from pathlib import Path
 
 from config import Config
 
+# Simple password gate
+password = st.text_input("Enter password:", type="password")
+if password != st.secrets["app_password"]:
+    if password:
+        st.error("Wrong password")
+    st.stop()
+
+# Optional visual confirmation
+st.success("Access granted")
+
 # Page configuration
 st.set_page_config(
     page_title="Patent Data Viewer",
