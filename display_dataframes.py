@@ -7,10 +7,6 @@ import streamlit as st
 import pandas as pd
 from pathlib import Path
 from config import Config
-import os
-
-# Set your app password here (consider using secure storage)
-APP_PASSWORD = os.getenv("APP_PASSWORD", "default_password")
 
 # ---------------------------------
 # Page configuration
@@ -22,9 +18,16 @@ st.set_page_config(page_title="Patent Data Viewer", page_icon="📊", layout="wi
 # ---------------------------------
 st.title("📊 Patent Applicant/Inventor Data Viewer")
 
+# ---------------------------------
+# Password protection
+# ---------------------------------
+APP_PASSWORD = st.secrets["app_password"]  # read from Streamlit Secrets
+
+
 # Function to check password
 def check_password(password):
     return password == APP_PASSWORD
+
 
 # Password input
 if "password_correct" not in st.session_state:
@@ -32,7 +35,7 @@ if "password_correct" not in st.session_state:
     if st.button("Submit"):
         if check_password(password):
             st.session_state.password_correct = True
-            st.success("Access granted!")
+            st.success("Access granted! ✅")
         else:
             st.session_state.password_correct = False
             st.error("🚫 Access denied! Incorrect password.")
@@ -61,26 +64,31 @@ if st.session_state.get("password_correct", False):
         reverse=True,
     )
 
-    # Prepare options for selectbox
-    dir_options = [str(p) for p in available_dirs] if available_dirs else [str(Path(Config.output_dir))]
-    selected_from_dropdown = dir_options[0]
-
-    # Dropdown for available directories
+    dir_options = (
+        [str(p) for p in available_dirs]
+        if available_dirs
+        else [str(Path(Config.output_dir))]
+    )
     selected_from_dropdown = st.sidebar.selectbox(
         "📁 Available DataTables directories", options=dir_options, index=0
     )
 
     # Manual override option
     use_custom = st.sidebar.checkbox("Use custom path", value=False)
-    selected_dir = st.sidebar.text_input("Custom directory path", value=selected_from_dropdown if not use_custom else "")
+    selected_dir = st.sidebar.text_input(
+        "Custom directory path", value=selected_from_dropdown if not use_custom else ""
+    )
+
     if use_custom and not selected_dir:
         st.warning("Please enter a custom directory path.")
 
     base_path = Path(selected_dir).expanduser()
     families_csv = base_path / "data" / "applicants_inventors" / "unique_family_ids.csv"
-    details_csv = base_path / "data" / "applicants_inventors" / "applicant_inventor_details.csv"
+    details_csv = (
+        base_path / "data" / "applicants_inventors" / "applicant_inventor_details.csv"
+    )
     summary_csv = base_path / "data" / "analysis" / "counts_ratios_summary.csv"
-    
+
     if not base_path.exists():
         st.error(f"❌ Directory not found: {base_path}")
         st.stop()
@@ -89,16 +97,10 @@ if st.session_state.get("password_correct", False):
     # Tabs
     # ---------------------------------
     tab_family, tab_details, tab_summary = st.tabs(
-        [
-            "🧬 Family IDs",
-            "👤 Applicant/Inventor Details",
-            "📈 Counts & Ratios Summary",
-        ]
+        ["🧬 Family IDs", "👤 Applicant/Inventor Details", "📈 Counts & Ratios Summary"]
     )
 
-    # ---------------------------------
-    # Tab: Family IDs
-    # ---------------------------------
+    # --- Tab: Family IDs ---
     with tab_family:
         st.subheader("Unique DOCDB Family IDs")
         if not families_csv.exists():
@@ -116,9 +118,7 @@ if st.session_state.get("password_correct", False):
                     mime="text/csv",
                 )
 
-    # ---------------------------------
-    # Tab: Applicant / Inventor Details
-    # ---------------------------------
+    # --- Tab: Applicant / Inventor Details ---
     with tab_details:
         st.subheader("Applicant/Inventor Details")
         if not details_csv.exists():
@@ -136,9 +136,7 @@ if st.session_state.get("password_correct", False):
                     mime="text/csv",
                 )
 
-    # ---------------------------------
-    # Tab: Counts & Ratios Summary
-    # ---------------------------------
+    # --- Tab: Counts & Ratios Summary ---
     with tab_summary:
         st.subheader("Counts and Ratios Summary")
         if not summary_csv.exists():
@@ -161,5 +159,3 @@ if st.session_state.get("password_correct", False):
     # ---------------------------------
     st.markdown("---")
     st.markdown("**Patent Data Analysis Tool** | Data source: PATSTAT")
-
-
