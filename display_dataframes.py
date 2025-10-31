@@ -111,8 +111,7 @@ if st.session_state.get("password_correct", False):
                 st.dataframe(df_family, use_container_width=True, height=500)
                 st.download_button(
                     label="📥 Download Family IDs",
-                    data=df_family.to_csv(index=False).encode("
-                                        "utf-8"),
+                    data=df_family.to_csv(index=False).encode("utf-8"),
                     file_name=families_csv.name,
                     mime="text/csv",
                 )
