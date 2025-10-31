@@ -9,7 +9,7 @@ from pathlib import Path
 from config import Config
 
 # Set your app password here
-# APP_PASSWORD = "team-analyse"
+APP_PASSWORD = "your_password"
 
 # ---------------------------------
 # Page configuration
