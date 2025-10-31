@@ -1,4 +1,6 @@
 # python main.py -c NO -s 2022 -e 2023 -r 10
+# https://teamanalysenors-fuzo53p4bkgpvizgrxwjdl.streamlit.app/
+# Passord: team-analyse
 
 import sys
 import argparse
@@ -7,17 +9,20 @@ from pathlib import Path
 import pandas as pd
 
 # Configure pandas display options for CLI
-pd.set_option('display.max_columns', None)  # Show all columns
-pd.set_option('display.max_rows', None)     # Show all rows
-pd.set_option('display.width', None)        # Auto-detect width
-pd.set_option('display.max_colwidth', None) # Show full column content
+pd.set_option("display.max_columns", None)
+pd.set_option("display.max_rows", None)
+pd.set_option("display.width", None)
+pd.set_option("display.max_colwidth", None)
 
-# Our functions
+# Import main data functions
 from get_applicants_inventors_details import (
     get_applicant_inventor,
     get_family_ids,
+    calculate_applicants_inventors_counts,
+    calculate_applicants_inventors_ratios,
 )
 from config import Config
+
 
 # ---------------------------
 # Logging
@@ -26,12 +31,9 @@ def setup_logging(log_dir: Path = None) -> logging.Logger:
     """Configure logging for both console and file output."""
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
-
-    # Avoid duplicate handlers if re-run interactively
     if logger.handlers:
         return logger
 
-    # --- Console handler (for CLI output) ---
     console_handler = logging.StreamHandler(sys.stdout)
     console_formatter = logging.Formatter(
         "%(asctime)s - %(levelname)s - %(message)s", "%H:%M:%S"
@@ -39,10 +41,10 @@ def setup_logging(log_dir: Path = None) -> logging.Logger:
     console_handler.setFormatter(console_formatter)
     logger.addHandler(console_handler)
 
-    # --- File handler (for persistent logs) ---
     if log_dir:
         log_dir.mkdir(parents=True, exist_ok=True)
         import datetime
+
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         log_file = log_dir / f"run_{timestamp}.log"
         file_handler = logging.FileHandler(log_file, encoding="utf-8")
@@ -58,6 +60,7 @@ def setup_logging(log_dir: Path = None) -> logging.Logger:
 
 
 logger = setup_logging()
+
 
 # ---------------------------
 # Helpers
@@ -92,11 +95,9 @@ def normalize_working_dir(path_value) -> Path:
     return normalized
 
 
-def create_data_folder(country_code: str, start_year: int, end_year: int, working_dir: Path) -> Path:
-    """
-    Create a folder for storing data and return the output directory path.
-    Example: DataTables_NO_2020_2021
-    """
+def create_data_folder(
+    country_code: str, start_year: int, end_year: int, working_dir: Path
+) -> Path:
     folder_name = f"DataTables_{country_code}_{start_year}_{end_year}"
     output_dir = working_dir / folder_name
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -105,29 +106,57 @@ def create_data_folder(country_code: str, start_year: int, end_year: int, workin
 
 
 def save_dfs_to_csv(dfs_tuple, df_names, csv_output_dir: Path):
-    """
-    Save DataFrames from a tuple to separate CSV files.
-    """
+    """Save multiple DataFrames to CSV files."""
     csv_output_dir.mkdir(parents=True, exist_ok=True)
-
     written_files = []
     for df_item, name in zip(dfs_tuple, df_names):
         filepath = csv_output_dir / f"{name}.csv"
         if isinstance(df_item, pd.DataFrame):
             if df_item.empty:
-                logger.warning(f"DataFrame '{name}' is empty. Creating empty file: {filepath}")
+                logger.warning(
+                    f"DataFrame '{name}' is empty. Creating empty file: {filepath}"
+                )
             df_item.to_csv(filepath, index=False)
             logger.info(f"Saved DataFrame '{name}' to {filepath}")
             written_files.append(filepath)
         else:
-            # This part of the original function is no longer needed for this use case
-            # but is kept for general utility.
             value_df = pd.DataFrame({"value": [df_item]})
             value_df.to_csv(filepath, index=False)
             logger.info(f"Saved value '{name}' to {filepath}")
             written_files.append(filepath)
-            
     return written_files
+
+
+def merge_counts_and_ratios(
+    df_applicant_counts: pd.DataFrame,
+    df_inventor_counts: pd.DataFrame,
+    df_combined_counts: pd.DataFrame,
+    df_applicant_ratios: pd.DataFrame,
+    df_inventor_ratios: pd.DataFrame,
+    df_combined_ratios: pd.DataFrame,
+) -> pd.DataFrame:
+    """
+    Merge all count and ratio DataFrames into one combined summary DataFrame.
+    """
+    df_final = (
+        df_applicant_counts.merge(
+            df_inventor_counts, on=["docdb_family_id", "person_ctry_code"], how="outer"
+        )
+        .merge(
+            df_combined_counts, on=["docdb_family_id", "person_ctry_code"], how="outer"
+        )
+        .merge(
+            df_applicant_ratios, on=["docdb_family_id", "person_ctry_code"], how="outer"
+        )
+        .merge(
+            df_inventor_ratios, on=["docdb_family_id", "person_ctry_code"], how="outer"
+        )
+        .merge(
+            df_combined_ratios, on=["docdb_family_id", "person_ctry_code"], how="outer"
+        )
+        .fillna(0)
+    )
+    return df_final
 
 
 # ---------------------------
@@ -135,61 +164,53 @@ def save_dfs_to_csv(dfs_tuple, df_names, csv_output_dir: Path):
 # ---------------------------
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Patent Data Analysis (CLI). Fetch and save applicant/inventor tables to CSV."
+        description="Patent Data Analysis (CLI). Fetch, analyze, and export applicant/inventor data."
     )
     parser.add_argument(
-        "--country-code", "-c",
-        default="NO",
-        help="Country code (default: NO)"
+        "--country-code", "-c", default="NO", help="Country code (default: NO)"
     )
     parser.add_argument(
-        "--start-year", "-s",
-        type=int, default=2020,
-        help="Start year (default: 2020)"
+        "--start-year", "-s", type=int, default=2020, help="Start year (default: 2020)"
     )
     parser.add_argument(
-        "--end-year", "-e",
-        type=int, default=2020,
-        help="End year (default: 2020)"
+        "--end-year", "-e", type=int, default=2020, help="End year (default: 2020)"
     )
     parser.add_argument(
-        "--working-dir", "-w",
-        type=Path, default=Path.cwd(),
-        help="Working directory where outputs will be written (default: current directory)"
+        "--working-dir",
+        "-w",
+        type=Path,
+        default=Path.cwd(),
+        help="Working directory (default: current)",
     )
     parser.add_argument(
-        "--range-limit", "-r",
-        type=int, default=None, # Changed default to None for full runs
-        help="Optional limit on the number of family IDs to process for testing. If not set, processes all."
+        "--range-limit",
+        "-r",
+        type=int,
+        default=None,
+        help="Optional family ID limit for testing.",
     )
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
-
     country_code = args.country_code.upper()
     start_year = args.start_year
     end_year = args.end_year
     working_dir = normalize_working_dir(args.working_dir)
     range_limit = args.range_limit
 
-    # Basic sanity checks
     if start_year > end_year:
         logger.error("Start year cannot be greater than end year.")
         sys.exit(1)
 
     try:
         logger.info(
-            f"Starting data processing for country: {country_code}, years: {start_year}-{end_year}"
+            f"Starting data processing for {country_code} ({start_year}-{end_year})"
         )
-        if range_limit:
-            logger.info(f"Applying a range limit of {range_limit} family IDs for testing.")
 
-        # Create output directory
+        # Step 1: Prepare output directory
         output_dir = create_data_folder(country_code, start_year, end_year, working_dir)
-
-        # Update Config with new settings
         Config.update(
             output_dir=str(output_dir),
             country_code=country_code,
@@ -197,61 +218,92 @@ def main():
             end_year=end_year,
         )
 
-        # Fetch family IDs
-        df_unique_family_ids = get_family_ids(
-            Config.country_code, Config.start_year, Config.end_year
-        )
-
+        # Step 2: Fetch unique family IDs
+        df_unique_family_ids = get_family_ids(country_code, start_year, end_year)
         if df_unique_family_ids.empty:
-            logger.warning("No family IDs found for the given criteria.")
-            print("\n=== DataFrame: Unique Family IDs ===")
+            logger.warning("No family IDs found for given parameters.")
             print(df_unique_family_ids)
-            print(f"\nShape: {df_unique_family_ids.shape}")
-            print("\nNo data to export. Done.")
             return
-
-        logger.info(f"Fetched {len(df_unique_family_ids)} unique family IDs.")
 
         if range_limit:
             df_unique_family_ids = df_unique_family_ids.head(range_limit)
-            logger.info(f"Applying range limit of {len(df_unique_family_ids)} family IDs after fetch.")
-
-        # --- REFACTORED: Names aligned with the two DataFrames ---
-        df_names = ["unique_family_ids"]
-
-        # Display DataFrames
-        print("\n=== DataFrame: Unique Family IDs ===")
-        print(df_unique_family_ids)
-        print(f"\nShape: {df_unique_family_ids.shape}")
-
-        # Save DataFrames to CSV
-        csv_output_dir = Path(Config.output_dir) / "data" / "applicants_inventors"
-        written_files = save_dfs_to_csv((df_unique_family_ids,), df_names, csv_output_dir)
+            logger.info(
+                f"Using limited dataset ({len(df_unique_family_ids)} family IDs)."
+            )
 
         family_ids_list = df_unique_family_ids["docdb_family_id"].tolist()
+        
+        # Save unique family IDs
+        family_ids_dir = Path(Config.output_dir) / "data" / "applicants_inventors"
+        family_ids_dir.mkdir(parents=True, exist_ok=True)
+        family_ids_path = family_ids_dir / "unique_family_ids.csv"
+        df_unique_family_ids.to_csv(family_ids_path, index=False)
+        logger.info(f"Saved unique family IDs to: {family_ids_path}")
+
+        # Step 3: Fetch applicant/inventor details
         df_applicant_inventor = get_applicant_inventor(family_ids_list)
-        details_csv_path = (
-            Path(Config.output_dir)
-            / "data"
-            / "applicants_inventors"
-            / "applicant_inventor_details.csv"
+
+        # Step 4: Calculate counts and ratios
+        logger.info("Calculating applicant/inventor counts and ratios...")
+        df_applicant_counts, df_inventor_counts, df_combined_counts = (
+            calculate_applicants_inventors_counts(df_applicant_inventor)
         )
 
-        # --- REFACTORED: Enhanced console summary ---
+        df_applicant_ratios, df_inventor_ratios, df_combined_ratios = (
+            calculate_applicants_inventors_ratios(
+                df_applicant_counts, df_inventor_counts, df_combined_counts
+            )
+        )
+
+        # Step 5: Save all DataFrames separately
+        csv_output_dir = Path(Config.output_dir) / "data" / "analysis"
+        df_names = [
+            "applicant_counts",
+            "inventor_counts",
+            "combined_counts",
+            "applicant_ratios",
+            "inventor_ratios",
+            "combined_ratios",
+        ]
+        dfs_tuple = (
+            df_applicant_counts,
+            df_inventor_counts,
+            df_combined_counts,
+            df_applicant_ratios,
+            df_inventor_ratios,
+            df_combined_ratios,
+        )
+        written_files = save_dfs_to_csv(dfs_tuple, df_names, csv_output_dir)
+
+        # Step 6: Merge all count and ratio DataFrames
+        logger.info("Merging all count and ratio DataFrames...")
+        df_summary = merge_counts_and_ratios(
+            df_applicant_counts,
+            df_inventor_counts,
+            df_combined_counts,
+            df_applicant_ratios,
+            df_inventor_ratios,
+            df_combined_ratios,
+        )
+        summary_path = csv_output_dir / "counts_ratios_summary.csv"
+        df_summary.to_csv(summary_path, index=False)
+        written_files.append(summary_path)
+        logger.info(f"Saved merged counts+ratios summary to: {summary_path}")
+
+        # Step 7: CLI summary
         print("\n=== Patent Data Export Summary ===")
         print(f"Country:      {country_code}")
         print(f"Years:        {start_year}-{end_year}")
-        print(f"Family IDs:   {len(df_unique_family_ids)}")
-        print(f"Details Recs: {len(df_applicant_inventor)}")
+        print(f"Families:     {len(df_unique_family_ids)}")
+        print(f"Records:      {len(df_applicant_inventor)}")
         print(f"Output Dir:   {csv_output_dir}")
         print("\nFiles written:")
         for p in written_files:
-            print(f" - {p.name}")
-        print(f" - {details_csv_path.name}")
+            print(f" - {Path(p).name}")
         print("\nDone.")
 
     except Exception as e:
-        logger.error(f"An unexpected error occurred: {e}", exc_info=True)
+        logger.error(f"Unexpected error: {e}", exc_info=True)
         print(f"\nERROR: {e}")
         sys.exit(1)
 

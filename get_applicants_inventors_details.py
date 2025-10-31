@@ -1,4 +1,5 @@
 import logging
+import unicodedata
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -87,7 +88,7 @@ def get_applicant_inventor(family_ids_list: list[int]) -> pd.DataFrame:
         if not family_ids_list or not all(isinstance(i, int) for i in family_ids_list):
             raise ValueError("Family IDs must be a non-empty list of integers.")
 
-        # Using batch for long dataset
+        # Using batch for long dataset divid family_id into batch here 200 from config 
         batch_size = Config.batch_size
         batches = [
             family_ids_list[i : i + batch_size]
@@ -119,17 +120,22 @@ def get_applicant_inventor(family_ids_list: list[int]) -> pd.DataFrame:
                     )
                     .join(t207, t201.appln_id == t207.appln_id)
                     .join(t206, t207.person_id == t206.person_id)
-                    .where(t201.docdb_family_id.in_(batch))
+                    .filter(t201.docdb_family_id.in_(batch))
                     .order_by(t201.docdb_family_id, t201.appln_id)
                 )
+
                 results = query.all()
-                df_batch = pd.DataFrame(results).drop_duplicates()
-                all_batches.append(df_batch)
-                df_appl_invt = (
-                    pd.concat(all_batches, ignore_index=True)
-                    if all_batches
-                    else pd.DataFrame()
-                )
+                if results:
+                    df_batch = pd.DataFrame(results).drop_duplicates()
+                    all_batches.append(df_batch)
+
+        # Concatenation 'outside' the loop for efficiency
+        df_appl_invt = (
+            pd.concat(all_batches, ignore_index=True)
+            if all_batches
+            else pd.DataFrame()
+        )
+
 
     except Exception as e:
         logger.error(f"Error fetching applicant/inventor data: {str(e)}")
@@ -140,8 +146,6 @@ def get_applicant_inventor(family_ids_list: list[int]) -> pd.DataFrame:
     output_path = output_dir / "applicant_inventor_details.csv"
     df_appl_invt.to_csv(output_path, index=False)
     return df_appl_invt
-
-
 
 
 #####################################################
@@ -209,7 +213,7 @@ def get_applicants_inventors_data(
             .filter(t201.docdb_family_id.in_(family_ids_list))
             .order_by(t201.docdb_family_id, t206.person_name)
         )
-        
+
         details_results = details_query.all()
 
         if not details_results:
@@ -242,3 +246,183 @@ def get_applicants_inventors_data(
         )
 
         return df_family_ids, df_details
+#####################################################
+# --------------- Analysis Functions ----------------
+#####################################################
+
+
+def calculate_applicants_inventors_counts(
+    df: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """
+    Calculate counts of applicants, inventors, and combined per country per docdb_family_id.
+    """
+    if df.empty:
+        return (
+            pd.DataFrame(
+                columns=["docdb_family_id", "person_ctry_code", "applicant_count"]
+            ),
+            pd.DataFrame(
+                columns=["docdb_family_id", "person_ctry_code", "inventor_count"]
+            ),
+            pd.DataFrame(
+                columns=["docdb_family_id", "person_ctry_code", "combined_count"]
+            ),
+        )
+
+    # Clean country codes
+    df["person_ctry_code"] = df["person_ctry_code"].astype(str).str.strip()
+    df = df[df["person_ctry_code"].notna() & (df["person_ctry_code"] != "")].copy()
+
+    # Helper to select best application per family
+    def select_best_application(
+        data: pd.DataFrame, sort_cols: list[str]
+    ) -> pd.DataFrame:
+        return (
+            data.groupby("docdb_family_id")
+            .apply(
+                lambda x: x.sort_values(
+                    by=sort_cols, ascending=[False, False, False]
+                ).iloc[0]
+            )
+            .reset_index(drop=True)
+        )
+
+    # Inventor counts
+    inventor_data = df[df["invt_seq_nr"] > 0].copy()
+    if not inventor_data.empty:
+        selected_inv = select_best_application(
+            inventor_data, ["nb_inventors", "nb_applicants", "earliest_publn_date"]
+        )
+        selected_inv_ids = selected_inv[["docdb_family_id", "appln_id"]]
+        selected_inventors = inventor_data.merge(
+            selected_inv_ids, on=["docdb_family_id", "appln_id"]
+        )
+        df_inventor_counts = (
+            selected_inventors.groupby(["docdb_family_id", "person_ctry_code"])[
+                "person_id"
+            ]
+            .nunique()
+            .reset_index(name="inventor_count")
+        )
+    else:
+        df_inventor_counts = pd.DataFrame(
+            columns=["docdb_family_id", "person_ctry_code", "inventor_count"]
+        )
+
+    # Applicant counts
+    applicant_data = df[df["applt_seq_nr"] > 0].copy()
+    if not applicant_data.empty:
+        selected_app = select_best_application(
+            applicant_data, ["nb_applicants", "nb_inventors", "earliest_publn_date"]
+        )
+        selected_app_ids = selected_app[["docdb_family_id", "appln_id"]]
+        selected_applicants = applicant_data.merge(
+            selected_app_ids, on=["docdb_family_id", "appln_id"]
+        )
+        df_applicant_counts = (
+            selected_applicants.groupby(["docdb_family_id", "person_ctry_code"])[
+                "person_id"
+            ]
+            .nunique()
+            .reset_index(name="applicant_count")
+        )
+    else:
+        df_applicant_counts = pd.DataFrame(
+            columns=["docdb_family_id", "person_ctry_code", "applicant_count"]
+        )
+
+    # Combined counts
+    df_combined_counts = (
+        pd.concat(
+            [
+                df_inventor_counts.rename(columns={"inventor_count": "combined_count"}),
+                df_applicant_counts.rename(
+                    columns={"applicant_count": "combined_count"}
+                ),
+            ],
+            ignore_index=True,
+        )
+        .groupby(["docdb_family_id", "person_ctry_code"], as_index=False)[
+            "combined_count"
+        ]
+        .sum()
+    )
+
+    return df_applicant_counts, df_inventor_counts, df_combined_counts
+
+
+def calculate_applicants_inventors_ratios(
+    df_applicant_counts: pd.DataFrame,
+    df_inventor_counts: pd.DataFrame,
+    df_combined_counts: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """
+    Calculate applicant, inventor, and combined ratios using pre-calculated counts.
+    """
+
+    def calculate_ratio(
+        df: pd.DataFrame, count_column: str, ratio_column: str
+    ) -> pd.DataFrame:
+        if df.empty:
+            return pd.DataFrame(
+                columns=["docdb_family_id", "person_ctry_code", ratio_column]
+            )
+
+        total_counts = (
+            df.groupby("docdb_family_id")[count_column]
+            .sum()
+            .reset_index(name="total_count")
+        )
+
+        df = pd.merge(df, total_counts, on="docdb_family_id", how="left")
+        df[ratio_column] = df[count_column] / df["total_count"]
+        df[ratio_column] = df[ratio_column].fillna(0)
+
+        return df[["docdb_family_id", "person_ctry_code", ratio_column]]
+
+    df_applicant_ratios = calculate_ratio(
+        df_applicant_counts, "applicant_count", "applicant_ratio"
+    )
+
+    df_inventor_ratios = calculate_ratio(
+        df_inventor_counts, "inventor_count", "inventor_ratio"
+    )
+
+    df_combined_ratios = calculate_ratio(
+        df_combined_counts, "combined_count", "combined_ratio"
+    )
+
+    return df_applicant_ratios, df_inventor_ratios, df_combined_ratios
+
+
+def merge_counts_and_ratios(
+    df_applicant_counts,
+    df_inventor_counts,
+    df_combined_counts,
+    df_applicant_ratios,
+    df_inventor_ratios,
+    df_combined_ratios,
+) -> pd.DataFrame:
+    """
+    Merge all count and ratio DataFrames into one combined summary.
+    """
+    df_final = (
+        df_applicant_counts.merge(
+            df_inventor_counts, on=["docdb_family_id", "person_ctry_code"], how="outer"
+        )
+        .merge(
+            df_combined_counts, on=["docdb_family_id", "person_ctry_code"], how="outer"
+        )
+        .merge(
+            df_applicant_ratios, on=["docdb_family_id", "person_ctry_code"], how="outer"
+        )
+        .merge(
+            df_inventor_ratios, on=["docdb_family_id", "person_ctry_code"], how="outer"
+        )
+        .merge(
+            df_combined_ratios, on=["docdb_family_id", "person_ctry_code"], how="outer"
+        )
+        .fillna(0)
+    )
+    return df_final
