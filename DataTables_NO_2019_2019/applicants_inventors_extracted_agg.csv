@@ -1,0 +1,11 @@
+docdb_family_id,role,nb_applicants,nb_inventors,person_ctry_code,person_name,psn_sector
+48143293,Applicants,1,,"  , NO","REMOVAID AS, Removaid AS",COMPANY
+48143293,Inventors,,1,"  , NO","BRATLIE MARTE, BRATLIE, MARTE, BRATLIE, Marte, Bratlie, Marte, MARTE BRATLIE",INDIVIDUAL
+65520050,Applicants,1,,NO,"PHARMAQ AS, Pharmaq AS","COMPANY, UNKNOWN"
+65520050,Inventors,,3,NO,"Arnfinn L. Ã˜kland, Liv Sandlund, NYLUND, Stian, Nylund, Stian, OKLAND, ARNFINN L., OKLAND, Arnfinn L., SANDLUND, Liv, Sandlund, Liv, Stian Nylund, Ã˜KLAND, Arnfinn L., Ã˜kland, Arnfinn L.",UNKNOWN
+66377383,Applicants,1,,"  , US","PALANTIR TECHNOLOGIES INC., Palantir Technologies Inc.",COMPANY
+66377383,Inventors,,2,"GB, NO, US","Bjelland, Petter Christian Sogn, Clowry, Declan",
+67384992,Applicants,1,,NO,EQUINOR ENERGY AS,COMPANY
+67384992,Inventors,,1,NO,"KNUT SVEBERG, SVEBERG, KNUT",INDIVIDUAL
+68238435,Applicants,1,,NO,Opera Norway AS,COMPANY
+68238435,Inventors,,1,PL,"Kocemba, Maciej",

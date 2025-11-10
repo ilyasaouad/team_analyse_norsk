@@ -1,91 +1,118 @@
+import logging
 import os
 import urllib.parse
+from contextlib import contextmanager
+from typing import Optional
+
 import pyodbc
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
+logger = logging.getLogger(__name__)
 load_dotenv()
 
-# Get variables from environment
-server = os.getenv('db_host')
-database = os.getenv('db_database')
-username = os.getenv('db_username')
-password = os.getenv('db_password')
+# Module-level engine (singleton pattern)
+_engine = None
 
-def connect_database():
-    """Create a direct PyODBC connection"""
+
+def _validate_env_vars() -> None:
+    """Validate required environment variables are set"""
+    required_vars = ["db_host", "db_database", "db_username", "db_password"]
+    missing = [var for var in required_vars if not os.getenv(var)]
+
+    if missing:
+        raise ValueError(f"Missing required environment variables: {missing}")
+
+
+def _build_connection_string() -> str:
+    """Build ODBC connection string from environment variables"""
+    return (
+        "DRIVER={ODBC Driver 17 for SQL Server};"
+        f'SERVER={os.getenv("db_host")};'
+        f'DATABASE={os.getenv("db_database")};'
+        f'UID={os.getenv("db_username")};'
+        f'PWD={os.getenv("db_password")}'
+    )
+
+
+def _get_engine():
+    """Get or create SQLAlchemy engine (singleton)"""
+    global _engine
+
+    if _engine is not None:
+        return _engine
+
     try:
-        conn_str = (
-            'DRIVER={ODBC Driver 17 for SQL Server};'
-            f'SERVER={server};'
-            f'DATABASE={database};'
-            f'UID={username};'
-            f'PWD={password}'
+        _validate_env_vars()
+
+        conn_str = _build_connection_string()
+        encoded_conn_str = urllib.parse.quote_plus(conn_str)
+        connection_url = f"mssql+pyodbc:///?odbc_connect={encoded_conn_str}"
+
+        _engine = create_engine(
+            connection_url,
+            echo=os.getenv("DB_ECHO", "False").lower() == "true",
+            pool_pre_ping=True,
+            pool_recycle=3600,
+            connect_args={"timeout": 30},
         )
+
+        # Test connection
+        with _engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+
+        logger.info("Database engine created and tested successfully")
+        return _engine
+
+    except Exception as e:
+        logger.error(f"Failed to create database engine: {e}", exc_info=True)
+        raise
+
+
+def cleanup_engine() -> None:
+    """Clean up engine resources (call at application shutdown)"""
+    global _engine
+    if _engine:
+        _engine.dispose()
+        _engine = None
+        logger.info("Database engine cleaned up")
+
+
+@contextmanager
+def get_session():
+    """Context manager for SQLAlchemy sessions with transaction handling
+
+    Usage:
+        with get_session() as session:
+            result = session.query(Model).all()
+    """
+    engine = _get_engine()
+    SessionLocal = sessionmaker(bind=engine)
+    session = SessionLocal()
+
+    try:
+        yield session
+        session.commit()
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Session error, rolling back: {e}")
+        raise
+    finally:
+        session.close()
+
+
+def get_raw_connection() -> Optional[pyodbc.Connection]:
+    """Get raw PyODBC connection (use only if SQLAlchemy is insufficient)
+
+    Returns:
+        pyodbc.Connection or None if connection fails
+    """
+    try:
+        conn_str = _build_connection_string()
         conn = pyodbc.connect(conn_str)
-        print("Database connection....OK...")
+        logger.info("PyODBC connection successful")
         return conn
     except pyodbc.Error as err:
-        print(f"Error connecting to database: {err}")
+        logger.error(f"PyODBC connection failed: {err}")
         return None
-
-def create_sqlalchemy_session():
-    """Create SQLAlchemy session with proper connection string and transaction handling
-    
-    Returns a context manager that properly handles session lifecycle.
-    Usage: with create_sqlalchemy_session() as session:
-    """
-    from contextlib import contextmanager
-    
-    @contextmanager
-    def _session_scope():
-        """Provide a transactional scope around a series of operations."""
-        try:
-            # First create the connection string
-            conn_str = (
-                'DRIVER={ODBC Driver 17 for SQL Server};'
-                f'SERVER={server};'
-                f'DATABASE={database};'
-                f'UID={username};'
-                f'PWD={password}'
-            )
-
-            # URL encode the connection string
-            encoded_conn_str = urllib.parse.quote_plus(conn_str)
-
-            # Create the full SQLAlchemy URL
-            connection_url = f"mssql+pyodbc:///?odbc_connect={encoded_conn_str}"
-
-            # Create the engine with connection pooling and timeout settings
-            engine = create_engine(
-                connection_url,
-                echo=False,  # Set to False to reduce noise
-                pool_pre_ping=True,  # Test connections before use
-                pool_recycle=3600,  # Recycle connections after 1 hour
-                connect_args={'timeout': 30}  # Connection timeout
-            )
-
-            # Test the connection
-            with engine.connect() as conn:
-                conn.execute(text("SELECT 1"))
-                print("Database connection test successful")
-
-            Session = sessionmaker(bind=engine)
-            session = Session()
-            
-            try:
-                yield session
-                session.commit()
-            except Exception:
-                session.rollback()
-                raise
-            finally:
-                session.close()
-                engine.dispose()
-                
-        except Exception as e:
-            print(f"Error creating SQLAlchemy session: {e}")
-            raise
-    
-    return _session_scope()
